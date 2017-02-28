@@ -1,0 +1,191 @@
+/* ============================================================
+* PassPasswords - pass support plugin for QupZilla
+* Copyright (C) 2017  tastytea <tastytea@tastytea.de>
+*
+* This program is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program.  If not, see <http://www.gnu.org/licenses/>.
+* ============================================================ */
+#include "passpasswordbackend.h"
+#include "passplugin.h"
+
+#include <QString>
+#include <QVector>
+#include <QDirIterator>
+#include <QProcess>
+#include <QSettings>
+#include <QStandardPaths>
+#include <QFile>
+#include <QDir>
+
+PassPasswordBackend::PassPasswordBackend(const QString &settingsPath, QObject* parent)
+    : PasswordBackend()
+    , m_settingsPath(settingsPath)
+{
+    m_passdir = QStandardPaths::standardLocations(QStandardPaths::HomeLocation).first()
+        + "/.password-store";
+    QSettings settings(m_settingsPath + QL1S("/extensions.ini"), QSettings::IniFormat);
+    settings.beginGroup("PassPasswords");
+    m_passdir = settings.value("passdir", m_passdir).toString();
+    m_rootnode = settings.value("rootnode", "qupzilla").toString();
+    m_writenode = settings.value("writenode", "qupzilla").toString();
+    settings.endGroup();
+}
+
+QString PassPasswordBackend::name() const
+{
+    return PassPlugin::tr("pass");
+}
+
+QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url)
+{
+    QVector<PasswordEntry> list;
+    const QString host = PasswordManager::createHost(url);
+
+    QDirIterator dir(m_passdir + "/" + m_rootnode, QStringList() << "*" + host + "*",
+        QDir::Files, QDirIterator::Subdirectories);
+    while (dir.hasNext()) {
+        QProcess pass;
+        QString output;
+        QStringList record;
+        PasswordEntry data;
+
+        // Build path for pass
+        const QString relpath = dir.next().remove(QRegExp("^" + m_passdir + "/"))
+                                          .remove(QRegExp(".gpg$"));
+        pass.start("pass", QStringList() << "show" << relpath);
+        pass.waitForFinished();
+        output = pass.readAllStandardOutput();
+
+        qDebug() << "Found: " << output;
+
+        record = output.split('\n', QString::SkipEmptyParts);
+
+        if (host != "") {
+            data.host = host;
+        } else { // Called by getAllEntries(), host = filename - .gpg
+            data.host = dir.fileInfo().completeBaseName();
+        }
+        data.password = record.at(0);
+
+        // Extract username and form data from file
+        QStringList::const_iterator it;
+        for (it = ++record.constBegin(); it != record.constEnd(); ++it) {
+            if ((*it).indexOf("username: ") == 0 ) {
+                data.username = (*it).split(": ").at(1);
+            } else if ((*it).indexOf("qupzilla: ") == 0 ) {
+                data.data += (*it).split(": ").at(1);
+            }
+        }
+        if (data.data != "") {
+            list.append(data);
+        }
+    }
+    if (list.empty()) {
+        // If nothing is found, remove subdomain and try again
+        if (host.count('.') > url.topLevelDomain().count('.')) {
+            QString newhost = host;
+            QUrl newurl = url;
+
+            newhost.remove(0, host.indexOf('.') + 1);
+            newurl.setHost(newhost);
+            list = getEntries(newurl);
+        }
+    }
+
+    return list;
+}
+
+QVector<PasswordEntry> PassPasswordBackend::getAllEntries()
+{
+    const QUrl url;
+
+    return getEntries(url);
+}
+
+void PassPasswordBackend::addEntry(const PasswordEntry &entry)
+{
+    QDir().mkpath(m_passdir + "/" + m_writenode);
+    QProcess pass;
+    const QString input = entry.password + '\n'
+                        + "username: "+ entry.username + '\n'
+                        + "qupzilla: " + entry.data + '\n';
+
+    pass.start("pass", QStringList() << "insert" << "-m" << m_writenode + "/" + entry.host);
+    pass.waitForStarted();
+    pass.write(input.toLatin1());
+    pass.closeWriteChannel();
+    pass.waitForFinished();
+}
+
+bool PassPasswordBackend::updateEntry(const PasswordEntry &entry)
+{
+    
+}
+
+void PassPasswordBackend::updateLastUsed(PasswordEntry &entry)
+{
+    
+}
+
+void PassPasswordBackend::removeEntry(const PasswordEntry &entry)
+{
+    QProcess pass;
+
+    // TODO: Support deleting entries which we did not write ourselves?
+    pass.start("pass", QStringList() << "rm" << "-f" << m_writenode + "/" + entry.host);
+    pass.waitForFinished();
+}
+
+void PassPasswordBackend::removeAll()
+{
+    QProcess pass;
+
+    pass.start("pass", QStringList() << "rm" << "-r" << "-f" << ".");
+    pass.waitForFinished();
+}
+
+void PassPasswordBackend::set_passdir(const QString &passdir)
+{
+    QSettings settings(m_settingsPath + QL1S("/extensions.ini"), QSettings::IniFormat);
+    settings.setValue("PassPasswords/passdir", passdir);
+    m_passdir = passdir;
+}
+
+void PassPasswordBackend::set_rootnode(const QString &node)
+{
+    QSettings settings(m_settingsPath + QL1S("/extensions.ini"), QSettings::IniFormat);
+    settings.setValue("PassPasswords/rootnode", node);
+    m_rootnode = node;
+}
+
+void PassPasswordBackend::set_writenode(const QString &node)
+{
+    QSettings settings(m_settingsPath + QL1S("/extensions.ini"), QSettings::IniFormat);
+    settings.setValue("PassPasswords/writenode", node);
+    m_writenode = node;
+}
+
+const QString PassPasswordBackend::get_passdir() const
+{
+    return m_passdir;
+}
+
+const QString PassPasswordBackend::get_rootnode() const
+{
+    return m_rootnode;
+}
+
+const QString PassPasswordBackend::get_writenode() const
+{
+    return m_writenode;
+}
