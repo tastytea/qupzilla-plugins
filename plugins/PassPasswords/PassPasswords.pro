@@ -13,9 +13,6 @@ HEADERS += passplugin.h \
 
 RESOURCES += passpasswords.qrc
 
-TRANSLATIONS += \
-    translations/de_DE.ts \
-
 FORMS += passpasswords_settings.ui
 
 
