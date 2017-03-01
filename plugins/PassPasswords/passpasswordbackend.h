@@ -27,7 +27,7 @@
 class PassPasswordBackend : public PasswordBackend
 {
 public:
-    explicit PassPasswordBackend(const QString &settingsPath, QObject* parent = 0);
+    explicit PassPasswordBackend(const QString &settingsPath);
 
     QString name() const;
 
@@ -35,6 +35,7 @@ public:
     QVector<PasswordEntry> getAllEntries();
 
     void addEntry(const PasswordEntry &entry);
+    void addEntry(const PasswordEntry &entry, const bool update);
     bool updateEntry(const PasswordEntry &entry);
     void updateLastUsed(PasswordEntry &entry);
 

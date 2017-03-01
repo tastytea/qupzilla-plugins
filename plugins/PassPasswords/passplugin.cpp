@@ -37,7 +37,7 @@ PluginSpec PassPlugin::pluginSpec()
     spec.name = "Pass Passwords";
     spec.info = "pass password backend";
     spec.description = "Provides support for pass (http://www.passwordstore.org/)";
-    spec.version = "0.3.1";
+    spec.version = "0.4.3";
     spec.author = "tastytea <tastytea@tastytea.de>";
     spec.icon = QPixmap(":passpasswords/data/icon.png");
     spec.hasSettings = true;

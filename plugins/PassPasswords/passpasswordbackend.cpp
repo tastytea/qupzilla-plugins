@@ -26,13 +26,14 @@
 #include <QStandardPaths>
 #include <QFile>
 #include <QDir>
+#include <QFileInfo>
 
-PassPasswordBackend::PassPasswordBackend(const QString &settingsPath, QObject* parent)
+PassPasswordBackend::PassPasswordBackend(const QString &settingsPath)
     : PasswordBackend()
     , m_settingsPath(settingsPath)
+    , m_passdir(QStandardPaths::standardLocations(QStandardPaths::HomeLocation).first()
+                + "/.password-store")
 {
-    m_passdir = QStandardPaths::standardLocations(QStandardPaths::HomeLocation).first()
-        + "/.password-store";
     QSettings settings(m_settingsPath + QL1S("/extensions.ini"), QSettings::IniFormat);
     settings.beginGroup("PassPasswords");
     m_passdir = settings.value("passdir", m_passdir).toString();
@@ -72,7 +73,8 @@ QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url)
 
         if (host != "") {
             data.host = host;
-        } else { // Called by getAllEntries(), host = filename - .gpg
+        }
+        else { // Called by getAllEntries(), host = filename - .gpg
             data.host = dir.fileInfo().completeBaseName();
         }
         data.password = record.at(0);
@@ -82,7 +84,8 @@ QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url)
         for (it = ++record.constBegin(); it != record.constEnd(); ++it) {
             if ((*it).indexOf("username: ") == 0 ) {
                 data.username = (*it).split(": ").at(1);
-            } else if ((*it).indexOf("qupzilla: ") == 0 ) {
+            }
+            else if ((*it).indexOf("qupzilla: ") == 0 ) {
                 data.data += (*it).split(": ").at(1);
             }
         }
@@ -92,7 +95,8 @@ QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url)
     }
     if (list.empty()) {
         // If nothing is found, remove subdomain and try again
-        if (host.count('.') > url.topLevelDomain().count('.')) {
+        if (url.topLevelDomain().count('.') > 0 &&
+            host.count('.') > url.topLevelDomain().count('.')) {
             QString newhost = host;
             QUrl newurl = url;
 
@@ -114,13 +118,31 @@ QVector<PasswordEntry> PassPasswordBackend::getAllEntries()
 
 void PassPasswordBackend::addEntry(const PasswordEntry &entry)
 {
+    addEntry(entry, false);
+}
+
+void PassPasswordBackend::addEntry(const PasswordEntry &entry, const bool update)
+{
     QDir().mkpath(m_passdir + "/" + m_writenode);
     QProcess pass;
     const QString input = entry.password + '\n'
                         + "username: "+ entry.username + '\n'
-                        + "qupzilla: " + entry.data + '\n';
+    // Basic Auth has no data, but we need non empty data to detect valid entries in getEntries()
+                        + "qupzilla: " + ((entry.data != "") ? entry.data : "Basic Auth") + '\n';
+    QString relpath = m_writenode + "/" + entry.host;
+    QFileInfo file(m_passdir + "/" + relpath + ".gpg");
 
-    pass.start("pass", QStringList() << "insert" << "-m" << m_writenode + "/" + entry.host);
+    uint num = 0;
+
+    if (update == false) {
+        while (file.exists()) {
+            ++num;
+            relpath = m_writenode + "/" + entry.host + "#" + QString::number(num);
+            file.setFile(m_passdir + "/" + relpath + ".gpg");
+        }
+    }
+
+    pass.start("pass", QStringList() << "insert" << "-m" << "-f" << relpath);
     pass.waitForStarted();
     pass.write(input.toLatin1());
     pass.closeWriteChannel();
@@ -129,28 +151,48 @@ void PassPasswordBackend::addEntry(const PasswordEntry &entry)
 
 bool PassPasswordBackend::updateEntry(const PasswordEntry &entry)
 {
-    
+    addEntry(entry, true);
+    return false;
 }
 
 void PassPasswordBackend::updateLastUsed(PasswordEntry &entry)
 {
-    
+    qDebug() << "updateLastUsed() NOT IMPLEMENTED" << entry.host;
 }
 
 void PassPasswordBackend::removeEntry(const PasswordEntry &entry)
 {
     QProcess pass;
+    QString relpath;
+    QFileInfo file(m_passdir + "/" + m_writenode + "/" + entry.host + ".gpg");
 
-    // TODO: Support deleting entries which we did not write ourselves?
-    pass.start("pass", QStringList() << "rm" << "-f" << m_writenode + "/" + entry.host);
-    pass.waitForFinished();
+    qDebug() << entry.host;
+    if (file.exists()) {
+        relpath = m_writenode + "/" + entry.host;
+    }
+    else {
+        // Entry is not under m_writenode, search under m_rootnode
+        QDirIterator dir(m_passdir + "/" + m_rootnode,
+                         QStringList() << "*" + entry.host + "*",
+                         QDir::Files, QDirIterator::Subdirectories);
+        if (dir.hasNext()) {
+            relpath = dir.next().remove(QRegExp("^" + m_passdir + "/"))
+                                              .remove(QRegExp(".gpg$"));
+        }
+    }
+
+    if (relpath != "") {
+        qDebug() << "PassPlugin: deleting " + relpath;
+        pass.start("pass", QStringList() << "rm" << "-f" << relpath);
+        pass.waitForFinished();
+    }
 }
 
 void PassPasswordBackend::removeAll()
 {
     QProcess pass;
 
-    pass.start("pass", QStringList() << "rm" << "-r" << "-f" << ".");
+    pass.start("pass", QStringList() << "rm" << "-r" << "-f" << m_rootnode);
     pass.waitForFinished();
 }
 
