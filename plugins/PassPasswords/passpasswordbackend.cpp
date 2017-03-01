@@ -50,10 +50,21 @@ QString PassPasswordBackend::name() const
 
 QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url)
 {
+    return getEntries(url, false);
+}
+
+QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url, const bool &getall)
+{
     QVector<PasswordEntry> list;
     const QString host = PasswordManager::createHost(url);
-    QDirIterator dir(m_passdir + "/" + m_rootnode, QStringList() << "*" + host + "*",
-        QDir::Files, QDirIterator::Subdirectories);
+    QDirIterator dir(m_passdir + "/" + m_rootnode,
+                     QStringList() << host + ".gpg" << host + "#*.gpg",
+                     QDir::Files, QDirIterator::Subdirectories);
+
+    // Return nothing if an empty URL is supplied
+    if (!url.isValid() && !getall) {
+        return list;
+    }
 
     while (dir.hasNext()) {
         QProcess pass;
@@ -69,7 +80,7 @@ QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url)
         output = pass.readAllStandardOutput();
         record = output.split('\n', QString::SkipEmptyParts);
 
-        if (host != "") {
+        if (!getall) {
             data.host = host;
         }
         else { // Called by getAllEntries(), host = filename - .gpg
@@ -88,6 +99,7 @@ QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url)
             }
         }
         if (data.data != "") {
+            //qDebug() << "PassPasswords: Found entry:" << output;
             list.append(data);
         }
     }
@@ -112,7 +124,7 @@ QVector<PasswordEntry> PassPasswordBackend::getAllEntries()
 {
     const QUrl url;
 
-    return getEntries(url);
+    return getEntries(url, true);
 }
 
 void PassPasswordBackend::addEntry(const PasswordEntry &entry)

@@ -32,6 +32,7 @@ public:
     QString name() const;
 
     QVector<PasswordEntry> getEntries(const QUrl &url);
+    QVector<PasswordEntry> getEntries(const QUrl &url, const bool &getall);
     QVector<PasswordEntry> getAllEntries();
 
     void addEntry(const PasswordEntry &entry);
