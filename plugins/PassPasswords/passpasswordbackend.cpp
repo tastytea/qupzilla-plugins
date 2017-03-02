@@ -19,6 +19,7 @@
 #include "passplugin.h"
 
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QDirIterator>
 #include <QProcess>
@@ -57,49 +58,28 @@ QVector<PasswordEntry> PassPasswordBackend::getEntries(const QUrl &url, const bo
 {
     QVector<PasswordEntry> list;
     const QString host = PasswordManager::createHost(url);
-    QDirIterator dir(m_passdir + "/" + m_rootnode,
-                     QStringList() << host + ".gpg" << host + "#*.gpg",
-                     QDir::Files, QDirIterator::Subdirectories);
+    QStringList filter;
+    QVector<QStringList> records;
 
-    // Return nothing if an empty URL is supplied
-    if (!url.isValid() && !getall) {
-        return list;
+    if (!getall) {
+        // Return nothing if an empty URL is supplied
+        if (!url.isValid()) {
+            return list;
+        }
+
+        filter << host + ".gpg" << host + "#*.gpg";
+    }
+    else {
+        filter << "*.gpg";
     }
 
-    while (dir.hasNext()) {
-        QProcess pass;
-        QString output;
-        QStringList record;
-        PasswordEntry data;
+    QDirIterator dir(m_passdir + "/" + m_rootnode, filter,
+                     QDir::Files, QDirIterator::Subdirectories);
+    for (const QStringList &record : getRecords(dir)) {
+        PasswordEntry data = extractData(record);
 
-        // Build path for pass
-        const QString relpath = dir.next().remove(QRegExp("^" + m_passdir + "/"))
-                                          .remove(QRegExp(".gpg$"));
-        pass.start("pass", QStringList() << "show" << relpath);
-        pass.waitForFinished();
-        output = pass.readAllStandardOutput();
-        record = output.split('\n', QString::SkipEmptyParts);
-
-        if (!getall) {
-            data.host = host;
-        }
-        else { // Called by getAllEntries(), host = filename - .gpg
-            data.host = dir.fileInfo().completeBaseName();
-        }
-        data.password = record.at(0);
-
-        // Extract username and form data from file
-        QStringList::const_iterator it;
-        for (it = ++record.constBegin(); it != record.constEnd(); ++it) {
-            if ((*it).indexOf("username: ") == 0 ) {
-                data.username = (*it).split(": ").at(1);
-            }
-            else if ((*it).indexOf("qupzilla: ") == 0 ) {
-                data.data += (*it).split(": ").at(1);
-            }
-        }
         if (data.data != "") {
-            //qDebug() << "PassPasswords: Found entry:" << output;
+            qDebug() << "PassPasswords: Found entry:" << data.host << data.id << data.data;
             list.append(data);
         }
     }
@@ -127,6 +107,56 @@ QVector<PasswordEntry> PassPasswordBackend::getAllEntries()
     return getEntries(url, true);
 }
 
+const QVector<QStringList> PassPasswordBackend::getRecords(QDirIterator &dir)
+{
+    QVector<QStringList> records;
+
+    while (dir.hasNext()) {
+        QProcess pass;
+        QString output;
+        QStringList record;
+        // Build path for pass
+        const QString relpath = dir.next().remove(QRegExp("^" + m_passdir + "/"))
+                                          .remove(QRegExp(".gpg$"));
+        QString basename = relpath.split('/').last();   // filename - .gpg
+
+        pass.start("pass", QStringList() << "show" << relpath);
+        pass.waitForFinished();
+        output = pass.readAllStandardOutput();
+        record = output.split('\n', QString::SkipEmptyParts);
+        record << "host: " + basename.split('#').first();
+        // I am using value() here because it returns "" if there is no # in basename
+        record << "qupzilla-id: " + basename.split('#').value(1);
+        records.append(record);
+    }
+
+    return records;
+}
+
+const PasswordEntry PassPasswordBackend::extractData(const QStringList &record)
+{   // Extract data from record
+    PasswordEntry data;
+    QStringList::const_iterator it;
+
+    data.password = record.at(0);
+
+    for (it = ++record.constBegin(); it != record.constEnd(); ++it) {
+        if ((*it).indexOf("username: ") == 0 ) {
+            data.username = (*it).split(": ").value(1);
+        }
+        else if ((*it).indexOf("qupzilla: ") == 0 ) {
+            data.data = (*it).split(": ").value(1).toLatin1();
+        }
+        else if ((*it).indexOf("host: ") == 0 ) {
+            data.host = (*it).split(": ").value(1);
+        }
+        else if ((*it).indexOf("qupzilla-id: ") == 0 ) {
+            data.id = (*it).split(": ").value(1).toInt();
+        }
+    }
+    return data;
+}
+
 void PassPasswordBackend::addEntry(const PasswordEntry &entry)
 {
     addEntry(entry, false);
@@ -142,12 +172,17 @@ void PassPasswordBackend::addEntry(const PasswordEntry &entry, const bool &updat
                         + "qupzilla: " + ((entry.data != "") ? entry.data : "Basic Auth") + '\n';
     QString relpath = m_writenode + "/" + entry.host;
     QFileInfo file(m_passdir + "/" + relpath + ".gpg");
-    uint num = 0;
 
     if (!update) {
+        unsigned int id = getEntries(QUrl(entry.host)).size();
+
+        if (id > 0) {
+            relpath = m_writenode + "/" + entry.host + "#" + QString::number(id);
+            file.setFile(m_passdir + "/" + relpath + ".gpg");
+        }
         while (file.exists()) {
-            ++num;
-            relpath = m_writenode + "/" + entry.host + "#" + QString::number(num);
+            ++id;
+            relpath = m_writenode + "/" + entry.host + "#" + QString::number(id);
             file.setFile(m_passdir + "/" + relpath + ".gpg");
         }
     }
@@ -162,7 +197,7 @@ void PassPasswordBackend::addEntry(const PasswordEntry &entry, const bool &updat
 bool PassPasswordBackend::updateEntry(const PasswordEntry &entry)
 {
     addEntry(entry, true);
-    return false;
+    return true;
 }
 
 void PassPasswordBackend::updateLastUsed(PasswordEntry &entry)
@@ -174,7 +209,13 @@ void PassPasswordBackend::removeEntry(const PasswordEntry &entry)
 {
     QProcess pass;
     QString relpath;
-    QFileInfo file(m_passdir + "/" + m_writenode + "/" + entry.host + ".gpg");
+    QString id;
+    QFileInfo file;
+
+    if (entry.id != 0) {
+        id = "#" + entry.id.toString();
+    }
+    file.setFile(m_passdir + "/" + m_writenode + "/" + entry.host + id + ".gpg");
 
     if (file.exists()) {
         relpath = m_writenode + "/" + entry.host;

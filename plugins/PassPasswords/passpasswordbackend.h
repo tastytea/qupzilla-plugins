@@ -18,11 +18,13 @@
 #ifndef PASSPASSWORDBACKEND_H
 #define PASSPASSWORDBACKEND_H
 
-#include <QVector>
-#include <QString>
-
 #include "passwordbackends/passwordbackend.h"
 #include "passwordmanager.h"
+
+#include <QVector>
+#include <QString>
+#include <QStringList>
+#include <QDirIterator>
 
 class PassPasswordBackend : public PasswordBackend
 {
@@ -34,6 +36,9 @@ public:
     QVector<PasswordEntry> getEntries(const QUrl &url);
     QVector<PasswordEntry> getEntries(const QUrl &url, const bool &getall);
     QVector<PasswordEntry> getAllEntries();
+
+    const QVector<QStringList> getRecords(QDirIterator &dir);
+    const PasswordEntry extractData(const QStringList &record);
 
     void addEntry(const PasswordEntry &entry);
     void addEntry(const PasswordEntry &entry, const bool &update);
